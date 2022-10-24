@@ -1,44 +1,97 @@
 import sys
 
-import requests, json
+import requests, json, base64, os
 from login import login
 import time
 import threading
-
+import ddddocr
 
 # 这是一个示例 Python 脚本。
 
 # 按 Shift+F10 执行或将其替换为您的代码。
 # 按 双击 Shift 在所有地方搜索类、文件、工具窗口、操作和设置。
 
+# url = "http://ehall.seu.edu.cn/gsapp/sys/jzxxtjapp/hdyy/vcode.do"
+# url = url + "?_=" + str(time.time())
+# r = requests.post(url)
+# print("Response:", r.text)
 
-def fetch_lecture(hd_wid: str, ss):
+
+def fetch_lecture(th_id,hd_wid: str, ss):
     url = "http://ehall.seu.edu.cn/gsapp/sys/jzxxtjapp/hdyy/yySave.do"
-    data_json = {'HD_WID': hd_wid}
+    code_url = "http://ehall.seu.edu.cn/gsapp/sys/jzxxtjapp/hdyy/vcode.do?_="+str(int(time.time()))
+    code_str = ss.post(code_url).text
+    # print(code_str)
+    img_str = json.loads(code_str)['result'].replace('data:image/jpeg;base64,', '')
+    img_data = base64.b64decode(img_str)
+    with open(th_id+'.jpeg', 'wb') as f:
+        f.write(img_data)
+    with open(th_id+'.jpeg', 'rb') as f:
+        image = f.read()
+    det = ddddocr.DdddOcr(det=False, ocr=True)
+    vcode = det.classification(image)
+    data_json = {'HD_WID': hd_wid,'vcode': vcode}
     form = {"paramJson": json.dumps(data_json)}
     r = ss.post(url, data=form)
+    print("Response:", r.text, time.time())
     result = r.json()
-    return result['code'], result['msg'], result['success']
+    if 'msg' in result:
+        return result['code'], result['msg'], result['success']
+    else:
+        return result['code'], None, result['success']
 
 
 def multi_threads(ss, threads_id, hd_wid: str):
     i = 1
     while True:
-        code, msg, success = fetch_lecture(hd_wid, ss)
-        print('线程{},第{}次请求,code：{},msg：{},success:{}'.format(threads_id, i, code, msg, success))
-        if success is True or msg == '当前活动预约人数已满，请重新选择！':
-            sys.exit(0)
-        i += 1
+        try:
+            code, msg, success = fetch_lecture(threads_id, hd_wid, ss)
+            print('线程{},第{}次请求,code：{},msg：{},success:{}'.format(threads_id, i, code, msg, success))
+            if success is True or msg == '当前活动预约人数已满，请重新选择' or '请求过于频繁' in msg:
+                token = ''  # 在pushplus网站中可以找到
+                title = ''
+                content = ''
+                if success is True:
+                    title = "预约成功"  # 改成你要的标题内容
+                    content = "祝贺！已抢到讲座\n"+'线程{},第{}次请求,code：{},msg：{},success:{}'.format(threads_id, i, code, msg, success)  # 改成你要的正文内容
+                if msg == '当前活动预约人数已满，请重新选择':
+                    title = "预约失败"  # 改成你要的标题内容
+                    content = "骚瑞，当前活动预约人数已满\n" + '线程{},第{}次请求,code：{},msg：{},success:{}'.format(threads_id, i, code, msg, success)  # 改成你要的正文内容
+                push = 'http://www.pushplus.plus/send?token=' + token + '&title=' + title + '&content=' + content
+                requests.get(push)
+                sys.exit(0)
+        except Exception:
+            continue
+        finally:
+            time.sleep(0.2)
+            i += 1
+# def multi_threads(ss, threads_id, hd_wid: str):
+#     i = 1
+#     while True:
+#         code, msg, success = fetch_lecture(threads_id, hd_wid, ss)
+#         print('线程{},第{}次请求,code：{},msg：{},success:{}'.format(threads_id, i, code, msg, success))
+#         if success is True or msg == '当前活动预约人数已满，请重新选择！':
+#             if success is True:
+#                 print("---------------\n预约成功！\n☆☆☆☆☆☆☆☆☆☆☆☆\n祝贺！已抢到讲座\n☆☆☆☆☆☆☆☆☆☆☆☆")
+#                 title = "预约成功"  # 改成你要的标题内容
+#                 content = "祝贺！已抢到讲座\n"+'线程{},第{}次请求,code：{},msg：{},success:{}'.format(threads_id, i, code, msg, success)  # 改成你要的正文内容
+#             if msg == '当前活动预约人数已满，请重新选择！':
+#                 print("---------------\n预约失败！\n☆☆☆☆☆☆☆☆☆☆☆☆\n骚瑞，当前活动预约人数已满\n☆☆☆☆☆☆☆☆☆☆☆☆")
+#             sys.exit(0)
+#         i += 1
+
+
 
 
 def get_lecture_list(ss):
     url = "http://ehall.seu.edu.cn/gsapp/sys/jzxxtjapp/*default/index.do#/hdyy"
     ss.get(url)
     url = "http://ehall.seu.edu.cn/gsapp/sys/jzxxtjapp/modules/hdyy/hdxxxs.do"
-    form = {"pageSize": 12, "pageNumber": 1}
+    form = {"pageSize": 30, "pageNumber": 1}
     r = ss.post(url, data=form)
     response = r.json()
     rows = response['datas']['hdxxxs']['rows']
+    # print(rows)
     return rows
 
 
@@ -58,8 +111,10 @@ def get_lecture_info(w_id, ss):
 if __name__ == '__main__':
     print("请输入帐号:")
     user_name = input()
+    # user_name = ''
     print("请输入密码:")
     password = input()
+    # password = ''
     print("开始登陆")
     s = login(user_name, password)
     while s is False or s is None:
@@ -74,15 +129,17 @@ if __name__ == '__main__':
     print("----------------课程列表----------------")
     lecture_list = get_lecture_list(s)
     for lecture in lecture_list:
-        print("课程wid：", end=" ")
-        print(lecture['WID'], end="  |")
-        print("课程名称：", end=" ")
-        print(lecture['JZMC'], end="  |")
-        print("预约开始时间：", end=" ")
-        print(lecture['YYKSSJ'], end="  |")
-        print("预约结束时间：", end=" ")
-        print(lecture['YYJSSJ'], end="  |")
-        print("活动时间：")
+        print("课程wid: ", end=" ")
+        print(lecture['WID'], end=" |")
+        print("课程类型:", end="")
+        print(lecture['JZXL_DISPLAY'], end=" |")
+        print("讲座地点:", end="")
+        print(lecture['JZDD'], end=" |")
+        print("预约开始时间:", end="")
+        print(lecture['YYKSSJ'], end=" |")
+        print("课程名称:", end="")
+        print(lecture['JZMC'], end=" |")
+        print("活动时间:",end="")
         print(lecture['JZSJ'])
     print("----------------课程列表end----------------")
     lecture_info = False
@@ -102,19 +159,31 @@ if __name__ == '__main__':
     current_time = int(time.time())
     begin_time = int(time.mktime(time.strptime(lecture_info['YYKSSJ'], "%Y-%m-%d %H:%M:%S")))
     end_time = int(time.mktime(time.strptime(lecture_info['YYJSSJ'], "%Y-%m-%d %H:%M:%S")))
+    # print(begin_time,end_time)
     if current_time > end_time:
         print("抢课时间已结束，大侠请重新来过")
         sys.exit(0)
     if current_time < begin_time - advance_time:
-        print('等待{}秒'.format(begin_time - advance_time - current_time))
-        time.sleep(begin_time - advance_time - current_time)
+        wait_time = begin_time - advance_time - current_time
+        print('共等待{}秒'.format(wait_time))
+        if wait_time > 1024:
+            time.sleep(begin_time - advance_time - current_time - 1025)
+            print('重新登录中……')
+            s.close()
+            s = login(user_name,password)
+            current_time = int(time.time())
+            print('等待{}秒'.format(begin_time - advance_time - current_time))
+            time.sleep(begin_time - advance_time - current_time)
+        else:
+            print('等待{}秒'.format(wait_time))
+            time.sleep(begin_time - advance_time - current_time)
     print('开始抢课')
     t1 = threading.Thread(target=multi_threads, args=(s, 't1', wid))
-    t2 = threading.Thread(target=multi_threads, args=(s, 't2', wid))
-    t3 = threading.Thread(target=multi_threads, args=(s, 't3', wid))
+    # t2 = threading.Thread(target=multi_threads, args=(s, 't2', wid))
+    # t3 = threading.Thread(target=multi_threads, args=(s, 't3', wid))
     t1.start()
-    t2.start()
-    t3.start()
+    # t2.start()
+    # t3.start()
 # print(s)
 
 # 119fbac8e9a146e2b0d73b59def1bc85
